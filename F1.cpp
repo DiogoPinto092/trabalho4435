@@ -1108,58 +1108,561 @@ int ConstructorGraph::removeTransfer(Constructor* ConstructorA, Constructor* Con
 /**************************/
 /*     A implementar      */
 /**************************/
+int getPointsForPosition(int position, int season) {
+    if (position <= 0) return 0;
 
-Constructor* ConstructorGraph::worstVictories(Constructor* constructorA) {
-
-return nullptr;
+    if (season < 1960) {
+        const vector<int> points_vec = {0, 8, 6, 4, 3, 2}; 
+        if (position > 0 && position < (int)points_vec.size()) return points_vec[position];
+    } else if (season >= 1960 && season < 1991) {
+        const vector<int> points_vec = {0, 9, 6, 4, 3, 2, 1};
+        if (position > 0 && position < (int)points_vec.size()) return points_vec[position];
+    } else if (season >= 1991 && season < 2003) {
+        const vector<int> points_vec = {0, 10, 6, 4, 3, 2, 1};
+        if (position > 0 && position < (int)points_vec.size()) return points_vec[position];
+    } else if (season >= 2003 && season < 2010) {
+        const vector<int> points_vec = {0, 10, 8, 6, 5, 4, 3, 2, 1};
+        if (position > 0 && position < (int)points_vec.size()) return points_vec[position];
+    } else if (season >= 2010) {
+        const vector<int> points_vec = {0, 25, 18, 15, 12, 10, 8, 6, 4, 2, 1};
+        if (position > 0 && position < (int)points_vec.size()) return points_vec[position];
+    }
+    return 0;
 }
 
-Constructor* ConstructorGraph::moreDrivers(Constructor* constructorB) {
-return nullptr;
+bool isStrictlyFinished(int statusId) {
+    return statusId == 1; // vStauts[1] is "Finished"
 }
 
-vector<string> ConstructorGraph::noConnection ( Constructor* constructorA ) {
-  
-return {};
-}
-
-int ConstructorGraph::updateTransfersOfYear(int year,  RaceManagement &RaM) {
-
-    return -1;
-}
-
-
-F1APP::F1APP()
-{
+bool isRaceCompletedInclusively(int statusId) {
+    if (statusId < 0 || statusId >= N_STATUS) return false;
+    if (statusId == 1) return true; 
     
+    const string& statusString = vStauts[statusId]; 
+    if (!statusString.empty() && statusString[0] == '+' && statusString.find("Lap") != string::npos) {
+        return true; 
+    }
+    return false;
 }
 
+
+Constructor* ConstructorGraph::worstVictories(Constructor* constructorA) { 
+    if (!constructorA) return nullptr;
+    int posA = constructorPosition(constructorA);
+    if (posA < 0 || posA >= (int)network.size() || network[posA].empty()) return nullptr;
+
+    Constructor* result_constructor = nullptr;
+    // "Pior diferença de vitórias" interpreted as largest positive winsDiff (SourceWins - TargetWins_A)
+    // This means A performed much worse than the source team regarding wins with these drivers.
+    int max_deficit_wins_diff = -numeric_limits<int>::max(); // Initialize to a very small number
+    int associated_max_deficit_points_diff = -numeric_limits<int>::max();
+
+    for (TransferData* td : network[posA]) {
+        if (!td || !td->constructor) continue;
+
+        // Primary criterion: "Pior (largest positive) diferença de vitórias"
+        if (result_constructor == nullptr || td->winsDiff > max_deficit_wins_diff) {
+            max_deficit_wins_diff = td->winsDiff;
+            associated_max_deficit_points_diff = td->pointsDiff;
+            result_constructor = td->constructor;
+        } else if (td->winsDiff == max_deficit_wins_diff) {
+            // Tie in winsDiff, check "pior (largest positive) diferença de pontos"
+            if (td->pointsDiff > associated_max_deficit_points_diff) {
+                associated_max_deficit_points_diff = td->pointsDiff;
+                result_constructor = td->constructor;
+            } else if (td->pointsDiff == associated_max_deficit_points_diff) {
+                // Tie in both, choose alphabetically smaller constructor name
+                if (td->constructor->getName() < result_constructor->getName()) {
+                    result_constructor = td->constructor;
+                }
+            }
+        }
+    }
+    return result_constructor;
+}
+
+Constructor* ConstructorGraph::moreDrivers(Constructor* constructorB_source) { 
+    if (!constructorB_source) return nullptr;
+
+    Constructor* result_constructor = nullptr;
+    int max_drivers = -1;
+    int best_points_diff = numeric_limits<int>::min();
+    int best_wins_diff = numeric_limits<int>::min();
+
+    for (size_t i = 0; i < totalConstructors; ++i) {
+        Constructor* receiver_candidate = constructorNodes[i];
+        if (receiver_candidate == constructorB_source) continue; 
+        if (i >= network.size()) continue; 
+
+        for (TransferData* td : network[i]) {
+            if (td && td->constructor == constructorB_source) { 
+                if (result_constructor == nullptr || td->numDrivers > max_drivers) {
+                    max_drivers = td->numDrivers;
+                    best_points_diff = td->pointsDiff;
+                    best_wins_diff = td->winsDiff;
+                    result_constructor = receiver_candidate;
+                } else if (td->numDrivers == max_drivers) {
+                    if (td->pointsDiff > best_points_diff) {
+                        best_points_diff = td->pointsDiff;
+                        best_wins_diff = td->winsDiff;
+                        result_constructor = receiver_candidate;
+                    } else if (td->pointsDiff == best_points_diff) {
+                        if (td->winsDiff > best_wins_diff) {
+                            best_wins_diff = td->winsDiff;
+                            result_constructor = receiver_candidate;
+                        } else if (td->winsDiff == best_wins_diff) {
+                            if (receiver_candidate->getName() < result_constructor->getName()) {
+                                result_constructor = receiver_candidate;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return result_constructor;
+}
+
+vector<string> ConstructorGraph::noConnection(Constructor* constructorA) { 
+    vector<string> result_names;
+    if (!constructorA) return result_names;
+    int posA = constructorPosition(constructorA);
+    if (posA < 0) return result_names;
+
+    vector<bool> is_connected(totalConstructors, false);
+
+    if(posA < (int)network.size()){
+        for (TransferData* td : network[posA]) {
+            if (td && td->constructor) {
+                int pos_source = constructorPosition(td->constructor);
+                if (pos_source >= 0) is_connected[pos_source] = true;
+            }
+        }
+    }
+
+    for (size_t i = 0; i < totalConstructors; ++i) {
+        if (i == (size_t)posA) continue; 
+        if(i < network.size()){
+            for (TransferData* td : network[i]) {
+                if (td && td->constructor == constructorA) {
+                    is_connected[i] = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    for (size_t i = 0; i < totalConstructors; ++i) {
+        if (i == (size_t)posA) continue; 
+        if (!is_connected[i] && constructorNodes[i]) { 
+            result_names.push_back(constructorNodes[i]->getName());
+        }
+    }
+    sort(result_names.begin(), result_names.end());
+    return result_names;
+}
+
+int ConstructorGraph::updateTransfersOfYear(int year, RaceManagement &RaM) {
+    if (year < 1950 || year > 2050) return -1;
+
+    vector<pair<Driver*, pair<Constructor*, pair<int, int>>>> prev_year_info;
+    vector<pair<Driver*, pair<Constructor*, pair<int, int>>>> curr_year_info;
+
+    auto get_driver_data_entry = [](vector<pair<Driver*, pair<Constructor*, pair<int, int>>>>& vec, Driver* d) 
+                                    -> pair<Constructor*, pair<int, int>>* {
+        for(auto& entry : vec) {
+            if(entry.first == d) return &entry.second;
+        }
+        return nullptr;
+    };
+    
+    auto add_or_update_driver_data = [&](vector<pair<Driver*, pair<Constructor*, pair<int, int>>>>& vec, 
+                                           Driver* d, Constructor* c, int points, int wins) {
+        pair<Constructor*, pair<int, int>>* data = get_driver_data_entry(vec, d);
+        if(data) {
+            if(data->first == nullptr && c != nullptr) data->first = c; 
+            data->second.first += points;
+            data->second.second += wins;
+        } else {
+            if(d) vec.push_back({d, {c, {points, wins}}});
+        }
+    };
+
+    for (Race* r : RaM.getListRaces()) {
+        if (!r) continue;
+        int race_season = r->getSeason();
+        if (race_season != year - 1 && race_season != year) continue;
+
+        for (DriResult* dr : r->getListRaceResults()) {
+            if (!dr || !dr->drive || !dr->constructor) continue;
+            int points = getPointsForPosition(dr->position, race_season);
+            int wins = (dr->position == 1);
+
+            if (race_season == year - 1) {
+                add_or_update_driver_data(prev_year_info, dr->drive, dr->constructor, points, wins);
+            } else { 
+                add_or_update_driver_data(curr_year_info, dr->drive, dr->constructor, points, wins);
+            }
+        }
+    }
+
+    int transfers_count = 0;
+    for (const auto& prev_entry : prev_year_info) {
+        Driver* driver = prev_entry.first;
+        Constructor* c_prev = prev_entry.second.first;
+        int p_prev = prev_entry.second.second.first;
+        int w_prev = prev_entry.second.second.second;
+
+        pair<Constructor*, pair<int, int>>* curr_data = get_driver_data_entry(curr_year_info, driver);
+
+        if (curr_data) {
+            Constructor* c_curr = curr_data->first;
+            int p_curr = curr_data->second.first;
+            int w_curr = curr_data->second.second;
+
+            if (c_prev && c_curr && c_prev != c_curr) { 
+                addConstructorNode(c_curr);
+                addConstructorNode(c_prev);
+                TransferData* td = new TransferData(c_prev, p_prev - p_curr, w_prev - w_curr, 1);
+                addTranfer(c_curr, td); 
+                transfers_count++; 
+            }
+        }
+    }
+    return transfers_count;
+}
+
+F1APP::F1APP() : drM_ref(nullptr), coM_ref(nullptr), ciM_ref(nullptr), raM_ref(nullptr) {
+    app_driver_race_logs.clear();
+    app_constructor_wins_not_pole.clear();
+    app_circuit_stats.clear();
+    app_circuit_driver_performances.clear();
+    app_season_driver_points.clear();
+}
 
 void F1APP::updateF1APP(DriverManagement &drM, ConstructorManagement &coM, CircuitManagement &ciM, RaceManagement &raM) {
+    this->drM_ref = &drM;
+    this->coM_ref = &coM;
+    this->ciM_ref = &ciM;
+    this->raM_ref = &raM;
 
+    app_driver_race_logs.clear();
+    app_constructor_wins_not_pole.clear();
+    app_circuit_stats.clear();
+    app_circuit_driver_performances.clear();
+    app_season_driver_points.clear();
+    
+    vector<int> processed_race_ids_for_circuit_totals;
+
+    if (!this->raM_ref) return;
+
+    for (Race* r : this->raM_ref->getListRaces()) {
+        if (!r || !r->getCircuit()) continue;
+        int current_season = r->getSeason();
+        int current_round = r->getRound();
+        Circuit* current_circuit = r->getCircuit();
+
+        F1APPCircuitStats* circuit_stat_entry_ptr = nullptr;
+        for(auto& entry : app_circuit_stats) {
+            if(entry.first == current_circuit) { circuit_stat_entry_ptr = &entry.second; break;}
+        }
+        if(!circuit_stat_entry_ptr) { 
+            app_circuit_stats.push_back({current_circuit, F1APPCircuitStats()}); 
+            circuit_stat_entry_ptr = &app_circuit_stats.back().second;
+        }
+
+        bool race_already_counted_for_total = false;
+        for(int rid : processed_race_ids_for_circuit_totals) {
+            if(rid == r->getRaceId()) { race_already_counted_for_total = true; break; }
+        }
+        if(!race_already_counted_for_total && circuit_stat_entry_ptr) {
+            circuit_stat_entry_ptr->total_races++;
+            processed_race_ids_for_circuit_totals.push_back(r->getRaceId());
+        }
+
+        for (DriResult* dr : r->getListRaceResults()) {
+            if (!dr || !dr->drive || !dr->constructor) continue;
+            Driver* driver = dr->drive;
+            Constructor* constructor = dr->constructor;
+            int points_for_race = getPointsForPosition(dr->position, current_season);
+
+            // 1. Populate app_driver_race_logs
+            vector<F1APPDriverRaceLog>* driver_logs_ptr = nullptr;
+            for(auto& entry : app_driver_race_logs) {
+                if(entry.first == driver) { driver_logs_ptr = &entry.second; break; }
+            }
+            if(!driver_logs_ptr) { 
+                app_driver_race_logs.push_back({driver, {}});
+                driver_logs_ptr = &app_driver_race_logs.back().second;
+            }
+            // MODIFIED for mostRaceFinish: use inclusive check for "not an abandon"
+            if(driver_logs_ptr) driver_logs_ptr->push_back({current_season, current_round, isRaceCompletedInclusively(dr->status)});
+
+
+            // 2. Populate app_constructor_wins_not_pole
+            if (dr->position == 1 && dr->grid != 1) {
+                vector<F1APPConstructorSeasonWin>* constructor_wins_ptr = nullptr;
+                for(auto& entry : app_constructor_wins_not_pole) {
+                    if(entry.first == constructor) { constructor_wins_ptr = &entry.second; break;}
+                }
+                if(!constructor_wins_ptr) { 
+                    app_constructor_wins_not_pole.push_back({constructor, {}});
+                    constructor_wins_ptr = &app_constructor_wins_not_pole.back().second;
+                }
+                if(constructor_wins_ptr) constructor_wins_ptr->push_back({current_season});
+            }
+
+            // 3. Populate app_circuit_stats (pole_wins part)
+            if (dr->position == 1 && dr->grid == 1 && circuit_stat_entry_ptr) {
+                 circuit_stat_entry_ptr->pole_wins++;
+            }
+            
+            // 4. Populate app_circuit_driver_performances
+            vector<pair<Driver*, vector<F1APPDriverCircuitPerformance>>>* circuit_drivers_perf_vec_ptr = nullptr;
+            for(auto& entry : app_circuit_driver_performances){
+                if(entry.first == current_circuit){ circuit_drivers_perf_vec_ptr = &entry.second; break;}
+            }
+            if(!circuit_drivers_perf_vec_ptr){ 
+                app_circuit_driver_performances.push_back({current_circuit, {}});
+                circuit_drivers_perf_vec_ptr = &app_circuit_driver_performances.back().second;
+            }
+            vector<F1APPDriverCircuitPerformance>* driver_perf_on_circuit_ptr = nullptr;
+            for(auto& entry : *circuit_drivers_perf_vec_ptr) {
+                if(entry.first == driver) { driver_perf_on_circuit_ptr = &entry.second; break;}
+            }
+            if(!driver_perf_on_circuit_ptr) { 
+                circuit_drivers_perf_vec_ptr->push_back({driver, {}});
+                driver_perf_on_circuit_ptr = &circuit_drivers_perf_vec_ptr->back().second;
+            }
+            if(driver_perf_on_circuit_ptr) driver_perf_on_circuit_ptr->push_back({dr->position, isRaceCompletedInclusively(dr->status), points_for_race});
+            
+            // 5. Populate app_season_driver_points
+            vector<pair<Driver*, int>>* season_total_points_vec_ptr = nullptr;
+            for(auto& entry : app_season_driver_points){
+                if(entry.first == current_season){ season_total_points_vec_ptr = &entry.second; break;}
+            }
+            if(!season_total_points_vec_ptr){ 
+                app_season_driver_points.push_back({current_season, {}});
+                season_total_points_vec_ptr = &app_season_driver_points.back().second;
+            }
+            int* driver_total_points_ptr = nullptr;
+            for(auto& entry : *season_total_points_vec_ptr) {
+                if(entry.first == driver) {driver_total_points_ptr = &entry.second; break;}
+            }
+            if(!driver_total_points_ptr){ 
+                season_total_points_vec_ptr->push_back({driver, 0});
+                driver_total_points_ptr = &season_total_points_vec_ptr->back().second;
+            }
+            if(driver_total_points_ptr) *driver_total_points_ptr += points_for_race;
+        }
+    }
+    
+    for(auto& entry : app_driver_race_logs){
+        sort(entry.second.begin(), entry.second.end(), [](const F1APPDriverRaceLog& a, const F1APPDriverRaceLog& b){
+            if(a.season != b.season) return a.season < b.season;
+            return a.round < b.round;
+        });
+    }
 }
 
 Driver* F1APP::mostRaceFinish(int yearA, int yearB) {
+    if (yearA > yearB || !this->drM_ref) return nullptr;
 
-return nullptr;
+    Driver* best_driver_ptr = nullptr;
+    int max_overall_streak = 0;
+
+    for (const auto& driver_log_pair : this->app_driver_race_logs) {
+        Driver* current_driver = driver_log_pair.first;
+        const vector<F1APPDriverRaceLog>& logs = driver_log_pair.second;
+
+        int current_driver_streak = 0;
+        int current_driver_max_streak_in_period = 0;
+
+        for (const auto& log : logs) {
+            if (log.season >= yearA && log.season <= yearB) {
+                if (log.completed_no_abandon) { 
+                    current_driver_streak++;
+                } else {
+                    current_driver_max_streak_in_period = max(current_driver_max_streak_in_period, current_driver_streak);
+                    current_driver_streak = 0;
+                }
+            } else if (log.season < yearA) { 
+                 current_driver_streak = 0; 
+            } else if (log.season > yearB ) { 
+                 current_driver_max_streak_in_period = max(current_driver_max_streak_in_period, current_driver_streak);
+                 current_driver_streak = 0; 
+                 break; 
+            }
+        }
+        current_driver_max_streak_in_period = max(current_driver_max_streak_in_period, current_driver_streak);
+
+        if (current_driver_max_streak_in_period > max_overall_streak) {
+            max_overall_streak = current_driver_max_streak_in_period;
+            best_driver_ptr = current_driver;
+        } else if (current_driver_max_streak_in_period == max_overall_streak && max_overall_streak > 0) { 
+            if (best_driver_ptr == nullptr || (current_driver && current_driver->getName() < best_driver_ptr->getName())) {
+                best_driver_ptr = current_driver;
+            }
+        }
+    }
+    return best_driver_ptr;
 }
 
-list<string> F1APP::pointsWidthoutWon(Circuit* cir) {
+Constructor* F1APP::mostRaceNotPole(int yearA, int yearB) {
+    if (yearA > yearB || !this->coM_ref) return nullptr;
 
-return {};
+    vector<pair<Constructor*, int>> counts_in_period; 
+
+    for(const auto& cons_wins_pair : this->app_constructor_wins_not_pole){
+        Constructor* constructor = cons_wins_pair.first;
+        const auto& wins_log = cons_wins_pair.second; 
+        
+        int wins_in_period_for_this_constructor = 0;
+        for(const auto& win_event : wins_log){
+            if(win_event.season >= yearA && win_event.season <= yearB){
+                wins_in_period_for_this_constructor++;
+            }
+        }
+
+        if(wins_in_period_for_this_constructor > 0){
+            bool found = false;
+            for(auto& entry : counts_in_period){ 
+                if(entry.first == constructor){ 
+                    entry.second += wins_in_period_for_this_constructor; 
+                    found = true;
+                    break;
+                }
+            }
+            if(!found) {
+                counts_in_period.push_back({constructor, wins_in_period_for_this_constructor});
+            }
+        }
+    }
+
+    if (counts_in_period.empty()) return nullptr;
+
+    sort(counts_in_period.begin(), counts_in_period.end(), 
+        [](const pair<Constructor*, int>& a, const pair<Constructor*, int>& b){
+        if(a.second != b.second) return a.second > b.second; 
+        return a.first->getName() < b.first->getName(); 
+    });
+    
+    return counts_in_period[0].first; 
 }
 
 string F1APP::poleToWin() {
+    if (this->app_circuit_stats.empty()) return "";
 
-return "";
+    string best_circuit_name = "";
+    double max_ratio = -1.0;
+    
+    vector<pair<Circuit*, F1APPCircuitStats>> sorted_circuit_stats_for_query = this->app_circuit_stats;
+    sort(sorted_circuit_stats_for_query.begin(), sorted_circuit_stats_for_query.end(), 
+       [](const pair<Circuit*, F1APPCircuitStats>&a, const pair<Circuit*, F1APPCircuitStats>&b){
+           if (!a.first || !b.first) return a.first < b.first; 
+           return a.first->getName() < b.first->getName();
+    });
+
+    for (const auto& entry : sorted_circuit_stats_for_query) {
+        Circuit* circuit = entry.first;
+        const F1APPCircuitStats& stats = entry.second;
+        if (!circuit || stats.total_races == 0) continue;
+
+        double current_ratio = static_cast<double>(stats.pole_wins) / stats.total_races;
+
+        if (current_ratio > max_ratio) {
+            max_ratio = current_ratio;
+            best_circuit_name = circuit->getName();
+        } 
+    }
+    return best_circuit_name;
 }
 
-Constructor * F1APP::mostRaceNotPole(int yearA, int yearB) {
- 
-return nullptr;
+list<string> F1APP::pointsWidthoutWon(Circuit* cir) {
+    list<string> result_driver_names;
+    if (!cir || !this->drM_ref) return result_driver_names;
 
-};
-vector<pair<string,int>> F1APP::classificationBySeason(int season){
+    const vector<pair<Driver*, vector<F1APPDriverCircuitPerformance>>>* driver_performances_on_circuit_ptr = nullptr;
+    for(const auto& circuit_entry : this->app_circuit_driver_performances){
+        if(circuit_entry.first == cir){
+            driver_performances_on_circuit_ptr = &circuit_entry.second;
+            break;
+        }
+    }
 
-return {};
+    if(!driver_performances_on_circuit_ptr) return result_driver_names; 
+
+    const vector<pair<Driver*, vector<F1APPDriverCircuitPerformance>>>& driver_performances_on_circuit = *driver_performances_on_circuit_ptr;
+
+    for (const auto& driver_perf_pair : driver_performances_on_circuit) {
+        Driver* driver = driver_perf_pair.first;
+        const vector<F1APPDriverCircuitPerformance>& performances = driver_perf_pair.second;
+
+        if (!driver || performances.empty()) continue;
+
+        int wins_on_circuit = 0;
+        int finished_races_count = 0;
+        int finished_with_points_count = 0;
+
+        for (const auto& perf : performances) {
+            if (perf.position == 1) wins_on_circuit++;
+            if (perf.completed_race_inclusively) {
+                finished_races_count++;
+                if (perf.points_scored > 0) {
+                    finished_with_points_count++;
+                }
+            }
+        }
+
+        if (wins_on_circuit == 0 && finished_races_count > 0 && finished_races_count == finished_with_points_count) {
+            result_driver_names.push_back(driver->getName());
+        }
+    }
+
+    result_driver_names.sort(); 
+    return result_driver_names;
+}
+
+vector<pair<string,int>> F1APP::classificationBySeason(int season_year){ 
+    vector<pair<string, int>> result_classification;
+
+    const vector<pair<Driver*, int>>* points_for_season_ptr = nullptr;
+    for(const auto& season_entry : this->app_season_driver_points){
+        if(season_entry.first == season_year){
+            points_for_season_ptr = &season_entry.second;
+            break;
+        }
+    }
+
+    if (!points_for_season_ptr) { 
+        bool season_has_races_in_raw_data = false;
+        if(this->raM_ref) { 
+            for(Race* r_check : this->raM_ref->getListRaces()){
+                if(r_check && r_check->getSeason() == season_year) {
+                    season_has_races_in_raw_data = true;
+                    break;
+                }
+            }
+        }
+         if(!season_has_races_in_raw_data && (season_year < 1950 || season_year > 2050) ) return {}; 
+         if (!points_for_season_ptr) return {}; 
+    }
+
+    const vector<pair<Driver*, int>>& points_for_season = *points_for_season_ptr;
+
+    for (const auto& driver_points_pair : points_for_season) {
+        if (driver_points_pair.first) { 
+             result_classification.push_back({driver_points_pair.first->getName(), driver_points_pair.second});
+        }
+    }
+
+    sort(result_classification.begin(), result_classification.end(),
+        [](const pair<string, int>& a, const pair<string, int>& b) {
+        if (a.second != b.second) {
+            return a.second > b.second; 
+        }
+        return a.first < b.first;   
+    });
+
+    return result_classification;
 }

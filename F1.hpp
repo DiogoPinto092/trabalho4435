@@ -874,13 +874,40 @@ class ConstructorGraph {
          */
         int updateTransfersOfYear(int year, RaceManagement &RaM);
 };
+struct F1APPDriverRaceLog {
+    int season;
+    int round;
+    bool completed_no_abandon; // MODIFIED: True if finished or classified (not a retirement/DSQ etc.)
+};
 
+struct F1APPConstructorSeasonWin { 
+    int season;
+};
 
+struct F1APPCircuitStats {
+    int pole_wins = 0;
+    int total_races = 0;
+};
+
+struct F1APPDriverCircuitPerformance {
+    int position;
+    bool completed_race_inclusively; 
+    int points_scored;
+};
 
 
 class F1APP {
     private:
-  
+    DriverManagement* drM_ref;
+    ConstructorManagement* coM_ref;
+    CircuitManagement* ciM_ref;
+    RaceManagement* raM_ref;
+
+    vector<pair<Driver*, vector<F1APPDriverRaceLog>>> app_driver_race_logs;
+    vector<pair<Constructor*, vector<F1APPConstructorSeasonWin>>> app_constructor_wins_not_pole;
+    vector<pair<Circuit*, F1APPCircuitStats>> app_circuit_stats;
+    vector<pair<Circuit*, vector<pair<Driver*, vector<F1APPDriverCircuitPerformance>>>>> app_circuit_driver_performances;
+    vector<pair<int, vector<pair<Driver*, int>>>> app_season_driver_points;
     
     
     public:
